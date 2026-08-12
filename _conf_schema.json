@@ -1,0 +1,29 @@
+{
+  "send_interval": {
+    "description": "每条回怼之间的间隔（秒）",
+    "type": "float",
+    "hint": "实际值不会低于 3 秒，避免消息系统过载",
+    "default": 5.0
+  },
+  "max_messages": {
+    "description": "单次最多发送条数",
+    "type": "int",
+    "hint": "范围 1-60；达到上限后自动停止",
+    "default": 20
+  },
+  "avoid_duplicates": {
+    "description": "单次任务内尽量不重复语句",
+    "type": "bool",
+    "default": true
+  },
+  "mention_target": {
+    "description": "每条消息都提及目标",
+    "type": "bool",
+    "default": true
+  },
+  "announce_completion": {
+    "description": "达到数量上限后发送结束提示",
+    "type": "bool",
+    "default": true
+  }
+}
