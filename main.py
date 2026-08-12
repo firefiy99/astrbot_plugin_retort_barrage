@@ -183,6 +183,10 @@ RETORTS = (
     "我日你大爷，不不，我好像日了我自己。",
     "一看见你我就知道小学生今天放假了。",
     "你知道你和一盘狗屎的唯一区别是什么吗？就是你没有盘子。",
+)
+
+# 激进语料池：仅当配置 aggressive_enabled=true 时启用，包含更激烈的嘴臭与家人梗语句。
+RETORTS_SPICY = (
     "你长这样还能出门，说明你勇气可嘉，脸皮也够厚。",
     "你往那一站，我以为是哪个动物园忘了关门。",
     "你长得挺安全，连劫匪看了都想放你一马。",
@@ -234,6 +238,7 @@ class RetortBarragePlugin(Star):
         self.avoid_duplicates = bool(self.config.get("avoid_duplicates", True))
         self.mention_target = bool(self.config.get("mention_target", True))
         self.announce_completion = bool(self.config.get("announce_completion", True))
+        self.aggressive_enabled = bool(self.config.get("aggressive_enabled", False))
         self._jobs: dict[str, RetortJob] = {}
         self._jobs_lock = asyncio.Lock()
         self._closed = False
@@ -298,18 +303,25 @@ class RetortBarragePlugin(Star):
     async def _sleep(self) -> None:
         await asyncio.sleep(self.send_interval)
 
+    def _build_pool(self) -> list:
+        """按配置构建语料池：默认仅普通语料；开启激进开关后混入激进语料。"""
+        pool = list(RETORTS)
+        if self.aggressive_enabled:
+            pool += list(RETORTS_SPICY)
+        return pool
+
     async def _retort_loop(self, scope: str, umo: str, target_id: str):
         sent = 0
         failures = 0
-        pool = list(RETORTS)
+        pool = self._build_pool()
         random.shuffle(pool)
         try:
             while not self._closed and sent < self.max_messages:
                 if not pool:
-                    pool = list(RETORTS)
+                    pool = self._build_pool()
                     if self.avoid_duplicates:
                         random.shuffle(pool)
-                text = pool.pop() if self.avoid_duplicates else random.choice(RETORTS)
+                text = pool.pop() if self.avoid_duplicates else random.choice(pool)
                 if await self._send_chain(umo, self._make_chain(target_id, text)):
                     sent += 1
                     failures = 0
