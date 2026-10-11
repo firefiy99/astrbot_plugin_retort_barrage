@@ -217,6 +217,19 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
             Plugin._extract_target(Event(targets=("all", "123"))), "123"
         )
 
+    def test_build_pool_modes(self):
+        plugin, _ = self.make_plugin()
+        self.assertEqual(plugin._build_pool(), list(PLUGIN_MODULE.RETORTS))
+        plugin, _ = self.make_plugin(aggressive_enabled=True)
+        self.assertEqual(
+            plugin._build_pool(),
+            list(PLUGIN_MODULE.RETORTS) + list(PLUGIN_MODULE.RETORTS_SPICY),
+        )
+        plugin, _ = self.make_plugin(aggressive_only=True)
+        self.assertEqual(plugin._build_pool(), list(PLUGIN_MODULE.RETORTS_SPICY))
+        plugin, _ = self.make_plugin(aggressive_enabled=True, aggressive_only=True)
+        self.assertEqual(plugin._build_pool(), list(PLUGIN_MODULE.RETORTS_SPICY))
+
     async def test_terminate_cancels_all_tasks_and_closes_plugin(self):
         plugin, _ = self.make_plugin()
         tasks = [asyncio.create_task(asyncio.Event().wait()) for _ in range(2)]

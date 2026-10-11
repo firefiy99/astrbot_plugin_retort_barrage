@@ -255,6 +255,36 @@ RETORTS_SPICY = (
     "你脑子空得能跑马，跑的还是瘸的。",
     "你说话像广场舞音乐，又吵又土还没一句在调上。",
     "你往人群里一站，人群自动分成两半：躲你的和笑你的。",
+    "你妈是不是站街的？不然你怎么贱得这么专业。",
+    "你全家就靠你妈一张嘴养活，一张吃饭一张接客。",
+    "你头上绿得能当红绿灯使，还搁这儿装什么纯情。",
+    "婊子见了你都得喊声前辈，论贱你确实是祖师爷。",
+    "你贱得这么理直气壮，是不是从小卖到大？",
+    "你妈生你的时候，产房都嫌晦气，护士都懒得拍你一下。",
+    "你这张嘴欠操，这脑子欠抽，全身上下就欠收拾。",
+    "你骚得这么起劲，是怕别人不知道你是出来卖的？",
+    "你是不是野种？不然正常人家怎么养得出你这种货色。",
+    "你爸的绿帽子都摞成山了，你还搁这儿装大尾巴狼。",
+    "你全家凑一块儿，都凑不出一句完整的人话。",
+    "你这种贱货，蚊子叮你一口都得吐出来。",
+    "你说话跟叫床似的，除了哼哼没一个字有内容。",
+    "就你这智商，把你卖了都凑不齐学费。",
+    "你长得这么抽象，你妈生你时是不是没敢看第二眼？",
+    "你贱起来六亲不认，骚起来认贼作父。",
+    "你妈是不是把你当垃圾生的？不然怎么随手就扔人堆里了。",
+    "你这种货色，倒贴都没人要，还得倒找钱。",
+    "你脑子里的水都放馊了，隔着天灵盖都能闻见味儿。",
+    "你这张脸丢出去，你妈都得连夜跟你断绝关系。",
+    "你是不是你爸捡来的？不然他怎么忍心让你长成这样。",
+    "你骚话这么多，怎么不去窑子里发挥特长？",
+    "你这种贱骨头，跪着都嫌你占地方。",
+    "你妈生你的时候是不是没使劲，把脑子给你落在产道里了？",
+    "你全家加起来都不如一条狗懂事，狗起码不咬自家人。",
+    "你脑子是不是租的？还欠着三个月房租没结。",
+    "你妈现在最后悔的事，就是当年没把你塞回去。",
+    "你妈把你生下来就没管过吧？不然你怎么野得像没人要的。",
+    "就你这点本事，连给人当小三都排不上号。",
+    "你全家是不是共用一个脑子？还是二手的，前任还是个傻子。",
 )
 
 
@@ -279,6 +309,7 @@ class RetortBarragePlugin(Star):
         self.mention_target = bool(self.config.get("mention_target", True))
         self.announce_completion = bool(self.config.get("announce_completion", True))
         self.aggressive_enabled = bool(self.config.get("aggressive_enabled", False))
+        self.aggressive_only = bool(self.config.get("aggressive_only", False))
         self._jobs: dict[str, RetortJob] = {}
         self._jobs_lock = asyncio.Lock()
         self._closed = False
@@ -344,7 +375,9 @@ class RetortBarragePlugin(Star):
         await asyncio.sleep(self.send_interval)
 
     def _build_pool(self) -> list:
-        """按配置构建语料池：默认仅普通语料；开启激进开关后混入激进语料。"""
+        """按配置构建语料池：纯辛辣模式仅用激进语料；默认仅普通语料；激进开关混入激进语料。"""
+        if self.aggressive_only:
+            return list(RETORTS_SPICY)
         pool = list(RETORTS)
         if self.aggressive_enabled:
             pool += list(RETORTS_SPICY)

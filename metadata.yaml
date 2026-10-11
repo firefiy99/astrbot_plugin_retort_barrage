@@ -4,7 +4,7 @@ short_desc: 通过指令对被提及成员连续发送辛辣回怼语句
 desc: 支持“/怼他 @某人”启动连续回怼、“/停止怼”立即终止；内置第二人称辛辣语料、限速、数量上限和任务清理。
 help: 使用 /怼他 @某人 开始，使用 /停止怼 停止。
 author: 小星萤
-version: 1.3.0
+version: 1.4.0
 repo: "https://github.com/firefiy99/astrbot_plugin_retort_barrage"
 support_platforms:
   - aiocqhttp
