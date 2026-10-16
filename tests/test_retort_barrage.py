@@ -3,6 +3,7 @@
 import asyncio
 import importlib.util
 import sys
+import time
 import types
 import unittest
 from pathlib import Path
@@ -15,6 +16,11 @@ class At:
         self.name = name
 
 
+class Plain:
+    def __init__(self, text=""):
+        self.text = text
+
+
 class MessageChain:
     def __init__(self):
         self.parts = []
@@ -25,6 +31,10 @@ class MessageChain:
 
     def message(self, text):
         self.parts.append(("text", text))
+        return self
+
+    def image(self, url):
+        self.parts.append(("image", url))
         return self
 
 
@@ -50,15 +60,19 @@ class DummyLogger:
     warning = staticmethod(lambda *_args, **_kwargs: None)
     exception = staticmethod(lambda *_args, **_kwargs: None)
     info = staticmethod(lambda *_args, **_kwargs: None)
+    error = staticmethod(lambda *_args, **_kwargs: None)
 
 
 class Event:
-    def __init__(self, targets=(), self_id="bot", group_id="group"):
+    def __init__(self, targets=(), self_id="bot", group_id="group", text="", sender="starter"):
         self.message_obj = types.SimpleNamespace(
-            self_id=self_id, message=[At(target) for target in targets]
+            self_id=self_id,
+            message=[Plain(text)] + [At(target) for target in targets],
         )
+        self.message_str = text
         self.unified_msg_origin = "umo"
         self._group_id = group_id
+        self._sender = sender
 
     def get_group_id(self):
         return self._group_id
@@ -67,7 +81,7 @@ class Event:
         return "platform"
 
     def get_sender_id(self):
-        return "starter"
+        return self._sender
 
     def plain_result(self, text):
         return text
@@ -91,6 +105,7 @@ def install_astrbot_stubs():
     modules["astrbot.api.star"].Context = object
     modules["astrbot.api.star"].Star = Star
     modules["astrbot.api.message_components"].At = At
+    modules["astrbot.api.message_components"].Plain = Plain
     sys.modules.update(modules)
 
 
@@ -102,6 +117,8 @@ sys.modules[SPEC.name] = PLUGIN_MODULE
 SPEC.loader.exec_module(PLUGIN_MODULE)
 Plugin = PLUGIN_MODULE.RetortBarragePlugin
 RetortJob = PLUGIN_MODULE.RetortJob
+
+EMPTY_POOL_MESSAGE = "没有可用语料"
 
 
 async def collect(generator):
@@ -122,6 +139,7 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
         }
         defaults.update(config)
         plugin = Plugin(context, defaults)
+        plugin._stats = {"total_sent": 0, "tasks_started": 0, "per_target": {}}
         return plugin, context
 
     async def register_loop(self, plugin, scope="scope", target="123"):
@@ -129,10 +147,10 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
 
         async def runner():
             await ready.wait()
-            await plugin._retort_loop(scope, "umo", target)
+            await plugin._retort_loop(scope, "umo", [target])
 
         task = asyncio.create_task(runner())
-        plugin._jobs[scope] = RetortJob(task, "starter", target, "umo")
+        plugin._jobs[scope] = RetortJob(task, "starter", [target], "umo")
         ready.set()
         return task
 
@@ -186,7 +204,7 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
     async def test_successful_start_has_no_confirmation_reply(self):
         plugin, _ = self.make_plugin()
 
-        async def blocking_loop(*_args):
+        async def blocking_loop(*_args, **_kwargs):
             await asyncio.Event().wait()
 
         with patch.object(plugin, "_retort_loop", blocking_loop):
@@ -200,7 +218,7 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
         plugin, _ = self.make_plugin()
         blocker = asyncio.create_task(asyncio.Event().wait())
         scope = plugin._scope_key(Event(targets=("123",)))
-        plugin._jobs[scope] = RetortJob(blocker, "starter", "123", "umo")
+        plugin._jobs[scope] = RetortJob(blocker, "starter", ["123"], "umo")
         result = await collect(plugin.start_retort(Event(targets=("456",))))
         self.assertEqual(len(plugin._jobs), 1)
         self.assertIn("已有回怼任务", result[0])
@@ -216,25 +234,47 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             Plugin._extract_target(Event(targets=("all", "123"))), "123"
         )
+        self.assertEqual(
+            Plugin._extract_targets(Event(targets=("123", "123", "456"))),
+            ["123", "456"],
+        )
 
     def test_build_pool_modes(self):
         plugin, _ = self.make_plugin()
-        self.assertEqual(plugin._build_pool(), list(PLUGIN_MODULE.RETORTS))
+        self.assertEqual(
+            plugin._build_pool(), [t for _, t in PLUGIN_MODULE.RETORTS]
+        )
         plugin, _ = self.make_plugin(aggressive_enabled=True)
         self.assertEqual(
             plugin._build_pool(),
-            list(PLUGIN_MODULE.RETORTS) + list(PLUGIN_MODULE.RETORTS_SPICY),
+            [t for _, t in PLUGIN_MODULE.RETORTS]
+            + [t for _, t in PLUGIN_MODULE.RETORTS_SPICY],
         )
         plugin, _ = self.make_plugin(aggressive_only=True)
-        self.assertEqual(plugin._build_pool(), list(PLUGIN_MODULE.RETORTS_SPICY))
+        self.assertEqual(
+            plugin._build_pool(), [t for _, t in PLUGIN_MODULE.RETORTS_SPICY]
+        )
         plugin, _ = self.make_plugin(aggressive_enabled=True, aggressive_only=True)
-        self.assertEqual(plugin._build_pool(), list(PLUGIN_MODULE.RETORTS_SPICY))
+        self.assertEqual(
+            plugin._build_pool(), [t for _, t in PLUGIN_MODULE.RETORTS_SPICY]
+        )
+
+    def test_build_pool_theme_and_keyword_filter(self):
+        plugin, _ = self.make_plugin(aggressive_only=True)
+        family = [t for tag, t in PLUGIN_MODULE.RETORTS_SPICY if tag == "家人"]
+        self.assertEqual(plugin._build_pool("家人"), family)
+        plugin, _ = self.make_plugin()
+        self.assertEqual(plugin._build_pool("家人"), [])
+        plugin, _ = self.make_plugin(blocked_keywords=["脑子"])
+        pool = plugin._build_pool()
+        self.assertNotEqual(pool, [t for _, t in PLUGIN_MODULE.RETORTS])
+        self.assertTrue(all("脑子" not in t for t in pool))
 
     async def test_terminate_cancels_all_tasks_and_closes_plugin(self):
         plugin, _ = self.make_plugin()
         tasks = [asyncio.create_task(asyncio.Event().wait()) for _ in range(2)]
         for index, task in enumerate(tasks):
-            plugin._jobs[str(index)] = RetortJob(task, "starter", str(index), "umo")
+            plugin._jobs[str(index)] = RetortJob(task, "starter", [str(index)], "umo")
         await plugin.terminate()
         self.assertTrue(plugin._closed)
         self.assertEqual(plugin._jobs, {})
@@ -252,9 +292,10 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
         blocker = asyncio.create_task(asyncio.Event().wait())
         event = Event(targets=("123",))
         scope = plugin._scope_key(event)
-        plugin._jobs[scope] = RetortJob(blocker, "starter", "123", "umo", sent=4)
+        plugin._jobs[scope] = RetortJob(blocker, "starter", ["123"], "umo", sent=4)
         result = await collect(plugin.retort_status(event))
         self.assertIn("4/9", result[0])
+        self.assertIn("123", result[0])
         self.assertIn("间隔 3 秒", result[0])
         blocker.cancel()
         await asyncio.gather(blocker, return_exceptions=True)
@@ -265,6 +306,132 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
         result = await collect(plugin.start_retort(Event(targets=("123",))))
         self.assertIn("正在停止", result[0])
         self.assertEqual(plugin._jobs, {})
+
+    def test_parse_theme_valid_and_invalid(self):
+        plugin, _ = self.make_plugin()
+        self.assertEqual(
+            plugin._parse_theme(Event(targets=("123",), text="怼他 智力")), ("智力", "")
+        )
+        self.assertEqual(plugin._parse_theme(Event(targets=("123",), text="怼他")), ("", ""))
+        theme, error = plugin._parse_theme(Event(targets=("123",), text="怼he 无效主题"))
+        self.assertEqual(theme, "")
+        self.assertIn("未知主题", error)
+
+    async def test_start_rejects_unknown_theme(self):
+        plugin, _ = self.make_plugin()
+        result = await collect(plugin.start_retort(Event(targets=("123",), text="怼他 无效主题")))
+        self.assertIn("未知主题", result[0])
+
+    async def test_start_rejects_blacklist_and_whitelist(self):
+        plugin, _ = self.make_plugin(target_blacklist=["123"])
+        result = await collect(plugin.start_retort(Event(targets=("123",))))
+        self.assertIn("保护名单", result[0])
+        plugin, _ = self.make_plugin(starter_whitelist=["999"])
+        result = await collect(plugin.start_retort(Event(targets=("123",))))
+        self.assertIn("权限", result[0])
+
+    async def test_cooldown_and_daily_limit(self):
+        plugin, _ = self.make_plugin(group_cooldown=300)
+        scope = plugin._scope_key(Event(targets=("123",)))
+        plugin._last_end[scope] = time.time()
+        result = await collect(plugin.start_retort(Event(targets=("123",))))
+        self.assertIn("冷却", result[0])
+
+        plugin, _ = self.make_plugin(daily_start_limit=1)
+
+        async def blocking_loop(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        with patch.object(plugin, "_retort_loop", blocking_loop):
+            result = await collect(plugin.start_retort(Event(targets=("123",))))
+            self.assertEqual(result, [])
+            result2 = await collect(plugin.start_retort(Event(targets=("456",))))
+            self.assertIn("明天再来", result2[0])
+            await plugin.terminate()
+
+    async def test_surrender_stops_task(self):
+        plugin, _ = self.make_plugin()
+
+        async def blocking_loop(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        with patch.object(plugin, "_retort_loop", blocking_loop):
+            await collect(plugin.start_retort(Event(targets=("123",))))
+            scope = plugin._scope_key(Event(targets=("123",)))
+            job = plugin._jobs[scope]
+
+            result = await collect(plugin.watch_surrender(Event(text="我错了", sender="123")))
+            self.assertTrue(any("求饶" in r for r in result))
+            await asyncio.gather(job.task, return_exceptions=True)
+            self.assertTrue(job.task.cancelled())
+            self.assertNotIn(scope, plugin._jobs)
+
+            await collect(plugin.start_retort(Event(targets=("123",))))
+            job2 = plugin._jobs[scope]
+            result2 = await collect(plugin.watch_surrender(Event(text="我错了", sender="999")))
+            self.assertEqual(result2, [])
+            self.assertIn(scope, plugin._jobs)
+            await plugin.terminate()
+
+    async def test_surrender_disabled_ignores_message(self):
+        plugin, _ = self.make_plugin(surrender_enabled=False)
+
+        async def blocking_loop(*_args, **_kwargs):
+            await asyncio.Event().wait()
+
+        with patch.object(plugin, "_retort_loop", blocking_loop):
+            await collect(plugin.start_retort(Event(targets=("123",))))
+            scope = plugin._scope_key(Event(targets=("123",)))
+            result = await collect(plugin.watch_surrender(Event(text="我错了", sender="123")))
+            self.assertEqual(result, [])
+            self.assertIn(scope, plugin._jobs)
+            await plugin.terminate()
+
+    async def test_multi_target_rotation(self):
+        plugin, context = self.make_plugin(max_messages=2)
+        ready = asyncio.Event()
+
+        async def runner():
+            await ready.wait()
+            await plugin._retort_loop("scope", "umo", ["1", "2"])
+
+        task = asyncio.create_task(runner())
+        plugin._jobs["scope"] = RetortJob(task, "starter", ["1", "2"], "umo")
+        with patch.object(plugin, "_sleep", AsyncMock()):
+            ready.set()
+            await task
+        chains = [call.args[1] for call in context.send_message.await_args_list]
+        self.assertEqual([chain.parts[0][2] for chain in chains], ["1", "2"])
+
+    async def test_empty_pool_guard(self):
+        plugin, context = self.make_plugin()
+        with patch.object(plugin, "_build_pool", lambda theme="": []):
+            task = await self.register_loop(plugin)
+            await task
+        self.assertEqual(context.send_message.await_count, 1)
+        text = context.send_message.await_args_list[0].args[1].parts[0][1]
+        self.assertIn(EMPTY_POOL_MESSAGE, text)
+        self.assertNotIn("scope", plugin._jobs)
+
+    async def test_image_chain(self):
+        plugin, context = self.make_plugin(
+            max_messages=1,
+            image_urls=["http://example.com/meme.jpg"],
+            image_probability=100,
+        )
+        task = await self.register_loop(plugin)
+        await task
+        chain = context.send_message.await_args_list[0].args[1]
+        self.assertIn(("image", "http://example.com/meme.jpg"), chain.parts)
+        self.assertIn(("at", "123", "123"), chain.parts)
+
+    async def test_stats_recorded(self):
+        plugin, _ = self.make_plugin()
+        with patch.object(plugin, "_sleep", AsyncMock()):
+            task = await self.register_loop(plugin)
+            await task
+        self.assertEqual(plugin._stats["total_sent"], 2)
+        self.assertEqual(plugin._stats["per_target"].get("123"), 2)
 
 
 if __name__ == "__main__":

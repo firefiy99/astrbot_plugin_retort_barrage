@@ -1,8 +1,11 @@
 """AstrBot 连续回怼插件。"""
 
 import asyncio
+import json
 import random
+import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import astrbot.api.message_components as Comp
@@ -11,289 +14,81 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
 PLUGIN_NAME = "astrbot_plugin_retort_barrage"
+PLUGIN_DIR = Path(__file__).resolve().parent
+CORPUS_PATH = PLUGIN_DIR / "corpus.json"
+CUSTOM_PATH = PLUGIN_DIR / "custom_retorts.txt"
+STATS_PATH = PLUGIN_DIR / "stats.json"
 
-# 第二人称辛辣语料：攻击发言、逻辑和行为，不包含威胁、歧视、隐私或家人攻击。
-RETORTS = (
-    "你这张嘴要是能拿来干正事，也不至于一开口就只剩丢人现眼。",
-    "你脑子里的水要是倒出来，估计都够拖地了。",
-    "你别急着开口，没人把你当哑巴，但你一说话大家真容易把你当傻子。",
-    "你这理解能力，不能说一塌糊涂，只能说糊涂得相当稳定。",
-    "你装得挺像那么回事，可惜一开口就露馅。",
-    "你说话跟放屁最大的区别，大概是放屁偶尔还能让人警醒。",
-    "你但凡有一丁点逻辑，也不至于把屁话说得这么理直气壮。",
-    "你这脑回路不是清奇，是压根没通电。",
-    "你可真牛逼，硬是把无知说出了新闻发布会的气势。",
-    "你那点可怜的认知，撑不起这么大的嗓门。",
-    "你别光顾着嘴硬，先看看自己的道理是不是已经稀碎了。",
-    "你这种水平还敢出来抬杠，主打的就是一个不要脸也不怕丢人。",
-    "你不是观点独特，你只是单纯地没弄明白。",
-    "你每次开口，都像在给愚蠢做免费宣传。",
-    "你挺适合保持沉默的，至少那样别人还能对你的智商保留一点幻想。",
-    "你这不是直率，是没教养还非要给自己贴金。",
-    "你那副自以为是的样子，和你空空如也的逻辑配得正好。",
-    "你先别忙着反驳，毕竟组织一句像样的话对你来说挺费劲。",
-    "你把不要脸发挥得这么稳定，也算有一项长期坚持的特长。",
-    "你嘴上跑的不是火车，是一整套报废线路。",
-    "你这点破见识还到处显摆，跟端着垃圾桶请人鉴赏没区别。",
-    "你说了半天，除了证明自己又蠢又犟，什么也没证明。",
-    "你不是能言善辩，你只是废话多到别人懒得打断。",
-    "你这人最大的本事，就是把简单的丢脸搞得声势浩大。",
-    "你脑子要是有嘴一半勤快，也不至于蠢得这么醒目。",
-    "你别摆出一副懂王的样子，你那点东西经不起半句追问。",
-    "你说话前要是肯过一下脑子，也不至于句句都像事故现场。",
-    "你是怎么做到每个字都认识，凑一起却全是屁话的？",
-    "你不是没救，你只是连自己哪里有毛病都看不明白。",
-    "你少拿无知当个性，没人有义务欣赏你这坨破逻辑。",
-    "你这一开口，空气都嫌自己被浪费了。",
-    "你可闭嘴吧，再说下去连你仅剩的那点体面都保不住。",
-    "你那不是自信，是脑子没货还拒绝盘点。",
-    "你以为自己在输出观点，其实只是在公开处理智商库存。",
-    "你这杠抬得毫无技术含量，纯靠脸皮厚硬撑。",
-    "你连事实都没弄清楚，就敢把屁放得震天响。",
-    "你那几句车轱辘废话，翻来覆去也洗不出半点道理。",
-    "你可以继续嘴硬，反正丢脸的又不是别人。",
-    "你这副德行最神奇的地方，是蠢得明明白白还自我感觉良好。",
-    "你不是让人说服不了，你是根本听不懂正常逻辑。",
-    "你最好珍惜别人还愿意搭理你的时候，毕竟笑话看久了也会腻。",
-    "你这水平就别强行发表意见了，沉默至少不会暴露得这么彻底。",
-    "你说话这么冲，不知道的还以为你有道理，仔细一听原来只有脾气。",
-    "你把胡说八道包装成直言不讳，脸皮确实比逻辑结实。",
-    "你连最基本的道理都接不住，就别装出一副高深莫测的蠢样。",
-    "你这人挺省事，别人还没骂你，你自己一开口就把缺点全交代了。",
-    "你要是真有本事，就不会只剩一张破嘴到处找存在感。",
-    "你这不是在交流，是在拿大家的耐心给你的愚蠢垫背。",
-    "你一张嘴就把没脑子三个字演得活灵活现。",
-    "你这点智商还四处乱晃，也不怕半路掉光。",
-    "你说的每句话都在提醒别人，投胎成人不等于学会思考。",
-    "你真是屎壳郎戴面具，臭不要脸还硬装体面。",
-    "你那脑袋纯粹就是个摆设，除了显高一点屁用没有。",
-    "你说话像厕所堵了三天，除了恶心就是添堵。",
-    "你这副欠收拾的嘴脸，和你那堆狗屁道理简直绝配。",
-    "你别把嗓门当脑子，叫得再响也掩盖不了你满嘴放屁。",
-    "你这人不光脑子空，嘴还漏风，什么垃圾都往外倒。",
-    "你以为自己是个角色，其实顶多算个碍眼的路障。",
-    "你这智商拿去回收，废品站都嫌分类困难。",
-    "你一说话就像垃圾桶翻了，内容没有，味道挺冲。",
-    "你这套狗屁理论，连拿来擦鞋都嫌硌脚。",
-    "你脸皮厚得能防弹，可惜脑子薄得挡不住一句实话。",
-    "你满嘴喷粪还觉得自己口才好，真是对语言最大的侮辱。",
-    "你别再瞎逼逼了，废话也得有个质量底线。",
-    "你这蠢劲儿不是偶尔发挥，是全天候稳定供应。",
-    "你脑子估计欠费停机了，只剩嘴还在违规营业。",
-    "你那点本事全长脸皮上了，难怪说话一点分量都没有。",
-    "你说得这么认真，我差点忘了这全是一堆狗屁。",
-    "你这张嘴最大的贡献，就是让沉默显得格外珍贵。",
-    "你不用故意装傻，你平时的表现已经非常自然。",
-    "你每说一句话，都在给自己的愚蠢补充证据。",
-    "你别跟我谈格局，你连一句人话都组织不明白。",
-    "你这种脑子配上这张嘴，属于垃圾分类里的混合废物。",
-    "你活像一本印错的说明书，内容扯淡还害人理解。",
-    "你说话这么没谱，指南针见了你都得原地辞职。",
-    "你这破逻辑东拼西凑，乞丐看了都嫌寒碜。",
-    "你少在这儿装蒜，你顶多算一瓣发霉的。",
-    "你脑容量不大，装的狗屁倒是一点不少。",
-    "你这人一开口，文化两个字都想连夜逃跑。",
-    "你不是嘴毒，你是脑子坏了以后废话往外泄。",
-    "你连胡说八道都说不出新意，废物得相当全面。",
-    "你长了一张能说话的嘴，可惜没配一个会思考的脑子。",
-    "你要是把吹牛的劲儿用来长脑子，现在也不至于这样。",
-    "你这副蠢样不用化妆，往那一站就是完整节目。",
-    "你说话像往清水里倒泔水，没营养还毁气氛。",
-    "你那点道理比纸还薄，脸皮倒比城墙还厚。",
-    "你别再给自己加戏了，没人愿意看傻子独角戏。",
-    "你这智商能活到现在，运气确实比能力强多了。",
-    "你嘴里的废话要是能发电，整座城都不用交电费。",
-    "你那副拽样挺唬人，一听内容才发现全是空壳。",
-    "你这人最大的优点，大概是缺点暴露得特别主动。",
-    "你说一句蠢话不稀奇，句句都蠢才是你的硬实力。",
-    "你那点破脾气别到处显摆，没人惯着你这臭毛病。",
-    "你把没素质当真性情，把没脑子当有个性，真够可笑。",
-    "你说话之前能不能先漱漱脑子，味儿实在太冲。",
-    "你这一肚子坏水没什么杀伤力，主要是看着恶心。",
-    "你也别怪别人瞧不起你，毕竟你自己一直在提供素材。",
-    "你这认知水平，跟井底之蛙比都算视野狭窄。",
-    "你说话全凭一股蛮劲，像拿马桶刷指点江山。",
-    "你真把自己当盘菜了，可惜端上桌也只配倒掉。",
-    "你这点出息，除了窝里横就是网上瞎叫唤。",
-    "你那脑回路弯得离谱，狗看了都找不到回家的路。",
-    "你别用那点半吊子见识挑战常识，挺丢人的。",
-    "你说的话狗屁不通，偏偏表情还像刚发现真理。",
-    "你不是单纯地蠢，你还特别努力地让所有人知道。",
-    "你这张嘴像漏水的垃圾袋，走到哪儿脏到哪儿。",
-    "你装腔作势的样子挺专业，可惜内容业余得可怜。",
-    "你讲道理讲不过就撒泼，确实把无能演得很完整。",
-    "你这点可怜的优越感，到底是谁施舍给你的？",
-    "你别在那里狗叫了，有理说理，没理就滚去补课。",
-    "你说话像把垃圾嚼碎了再吐出来，费劲又恶心。",
-    "你不是反应慢，你是脑子根本没参与这场对话。",
-    "你那点小心思写满脸上了，还装什么高明。",
-    "你这破嘴一刻不停，脑子却像放了永久长假。",
-    "你连自己说过什么都圆不回来，还好意思硬撑。",
-    "你那堆废话唯一清楚的地方，就是清楚地暴露了无知。",
-    "你这辈子要是少说几句屁话，形象都能抢救回来一点。",
-    "你把自己看得太高，把别人耐心看得太不值钱。",
-    "你不是胆子大，你只是蠢到意识不到自己多可笑。",
-    "你这脑袋里要真有东西，也不会只会重复那几句臭屁。",
-    "你可别继续装明白人了，演技差得让人替你尴尬。",
-    "你这话说出口，连狗屁两个字都觉得受了侮辱。",
-    "你除了胡搅蛮缠，还会不会一点像人的沟通方式？",
-    "你这么爱显摆无知，是怕别人发现得不够快吗？",
-    "你那张破嘴要是有刹车，也不至于一路丢人到现在。",
-    "你别急着证明自己没救，大家早就看明白了。",
-    "你说话像拿臭袜子捂人脸，没道理，只剩下膈应。",
-    "你这智力水平不适合抬杠，比较适合安静旁听。",
-    "你满脑子浆糊还摇得挺响，生怕别人不知道里面是空的。",
-    "你这种人最擅长的，就是把别人的耐心当成自己犯贱的资本。",
-    "你话说得越多，越显得沉默对你是一种奢侈的体面。",
-    "你先把自己那堆烂逻辑收拾干净，再出来指手画脚。",
-    "你这张脸要配得上你的自信，至少得再厚三层。",
-    "你不是不可理喻，你是压根不配让道理浪费时间。",
-    "你浑身上下最硬的就是嘴，最软的就是那点可怜的逻辑。",
-    "你继续放你的狗屁，反正正常人已经把你当背景噪音了。",
-    "你这套说辞看着挺完整，可惜从开头到结尾都没沾上逻辑。",
-    "你别把固执当坚持，错得再坚定也不会自动变成正确。",
-    "你一边逃避事实一边高谈阔论，姿势挺足，内容全无。",
-    "你这理解速度倒不算慢，只是每次都精准地理解错。",
-    "你说话像没保存的草稿，混乱、残缺，还非要公开展示。",
-    "你那点论据撑不起结论，倒是把你的心虚衬得很明显。",
-    "你别忙着摆架子，空洞的观点再端着也不会更有分量。",
-    "你这思路像断线的风筝，飘得挺远，就是找不到重点。",
-    "你每次自信发言，都像在提醒大家判断力有多重要。",
-    "你要是肯花吹嘘自己一半的力气思考，也不至于这么可笑。",
-    "你这观点唯一稳定的地方，就是稳定地经不起推敲。",
-    "你不是把问题想复杂了，你是从一开始就没想明白。",
-    "你先把前后矛盾圆上，再来表演这副胜券在握的样子。",
-    "你这番发言没有说服力，倒很有劝人闭嘴的教育意义。",
-    "你总能绕开重点直奔笑点，也算一种罕见的精准。",
-    "你那点逻辑像临时拼起来的纸桥，碰到事实就当场塌了。",
-    "你别再拿情绪冒充证据，声音再大也填不上道理的空缺。",
-    "你这思考方式挺环保，一个结论循环使用，从不更新。",
-    "你说得越笃定，越显得你对事实到底有多陌生。",
-    "你不是没有观点，只是你的观点和常识一直互不认识。",
-    "你这场抬杠最大的成果，就是成功证明了自己不讲道理。",
-    "你先别急着赢，至少先弄清楚大家到底在讨论什么。",
-    "你把话说得这么满，是怕别人看不出你的底气全靠硬撑吗？",
-    "你这反驳看似来势汹汹，实际连问题的边都没碰到。",
-    "你就像根苦瓜，穿得这么清凉，长得这么败火。",
-    "你这么厉害怎么不去青青草原抓羊？",
-    "毕竟这也不是一个人贱人爱的社会，你还是收敛一点的好。",
-    "你毁了我忍受傻逼的能力。",
-    "你妈带你逛街，别人都问：大姐，你这猴多少钱买的？",
-    "像你这种人在连续剧里，最多只能活2集，而且还是死尸。",
-    "我日你大爷，不不，我好像日了我自己。",
-    "一看见你我就知道小学生今天放假了。",
-    "你知道你和一盘狗屎的唯一区别是什么吗？就是你没有盘子。",
-)
+# 主题标签：智力 / 外貌 / 家人 / 存在 / 言行；「自定义」供 custom_retorts.txt 使用。
+THEMES = ("智力", "外貌", "家人", "存在", "言行", "自定义")
+DEFAULT_SURRENDER_KEYWORDS = ("我错了", "我服了", "别怼了", "投降", "饶了我")
 
-# 激进语料池：仅当配置 aggressive_enabled=true 时启用，包含更激烈的嘴臭与家人梗语句。
-RETORTS_SPICY = (
-    "你长这样还能出门，说明你勇气可嘉，脸皮也够厚。",
-    "你往那一站，我以为是哪个动物园忘了关门。",
-    "你长得挺安全，连劫匪看了都想放你一马。",
-    "你爸妈生你的时候是不是只抽了个空壳，精华全让胎盘吸收了？",
-    "你这张脸去整容，医生都得倒贴钱求你换一个。",
-    "你脑子是出厂时就被拿去垫桌脚了吧？",
-    "你说话我都不敢接，怕被你的智商传染。",
-    "你这种脑子，猪见了都得连夜给你腾窝。",
-    "你但凡有点自知之明，现在就该找个墙角面壁去。",
-    "你脑袋里装的大概是浆糊的批发市场，还常年断货。",
-    "你这种智商还活着，全靠地球引力撑着没飘走。",
-    "你嘴巴这么臭，是不是上辈子是茅坑里泡大的？",
-    "你说的话比我家厕所还脏，关键是厕所还能冲，你冲不掉。",
-    "你这种货色，扔进垃圾桶都算污染环境。",
-    "你活着就是给世界添堵，死了还得麻烦别人处理尸体。",
-    "你爹妈当年要是有你这觉悟，早该把你射在墙上。",
-    "你这种人我见多了，除了嘴硬，浑身没一个地方硬。",
-    "你连狗都嫌，狗好歹还能看家，你只会添乱。",
-    "你妈生你的时候是不是把胎盘养大了，你只是顺便出来的？",
-    "你全家都挺会生的，就是把你这个残次品忘了退货。",
-    "你爸要是知道生了你这么个玩意儿，估计连夜去结扎。",
-    "你奶奶带大你，是不是因为只有她能忍受你这德行？",
-    "你家祖坟冒的不是青烟，是臭气。",
-    "你这种话说出来，我都不好意思替你尴尬，毕竟你连尴尬都理解不了。",
-    "你的存在本身就是对进化论最大的质疑。",
-    "跟你讲道理是我今天最大的错误，毕竟你不能对空气有要求。",
-    "你赢了我吧，毕竟跟废物争输赢，赢了也不光彩。",
-    "你这种水平能活到现在，说明社会对傻子真的很宽容。",
-    "你活着浪费空气，死了浪费土地，半死不活还浪费人民币。",
-    "你脑子进的水，拧出来能缓解全球干旱。",
-    "你爸妈的基因传到你这儿，算是彻底断了传承。",
-    "你长得挺有创意，活得也挺有勇气。",
-    "你要是去测智商，仪器会当场报修。",
-    "你脑子是个好东西，可惜你出生的时候没领到。",
-    "你说话自带降智光环，方圆十米寸草不生。",
-    "你长得像二维码，不凑近扫一下都不知道有多抽象。",
-    "你这张脸去吓鬼，鬼都得连夜搬家。",
-    "你活着就是个错误，还是那种没法撤回的。",
-    "你脑子空得能开演唱会，可惜连票都送不出去。",
-    "你全家就出了你这么个玩意儿，基因彩票中了张谢谢惠顾。",
-    "你这张嘴除了喷粪，就剩吃饭时浪费粮食。",
-    "你脑子要是能发光，也就萤火虫屁股那么点亮度。",
-    "你这种智商，骗子都懒得骗，怕亏本。",
-    "你长得这么抽象，毕加索看了都想收你当关门弟子。",
-    "你活着最大的贡献，就是让身边人的自信暴涨。",
-    "你爸妈生你的时候，估计把脑子当赠品送出去了。",
-    "你脑子转得比生锈的齿轮还费劲，还自以为在高速运转。",
-    "你长得挺省化妆品的，反正抹了也白抹。",
-    "你说话像便秘，半天挤一句还全是硬的。",
-    "你这种货色，阎王爷见了都得主动加班。",
-    "你一出场，整条街的平均智商都被拉低了。",
-    "你爸妈开家长会，老师都建议先去做个亲子鉴定。",
-    "你脑子里的沟回，平得能当高速公路跑。",
-    "你要是能把蠢戒了，戒毒所都得给你立个雕像。",
-    "你这种人设，编剧都不敢写，怕观众骂太假。",
-    "你说话的水平，复读机听了都想格式化自己。",
-    "你长得这么随机，上帝捏你的时候肯定在掷骰子。",
-    "你全家开会研究你，最后一致认定是工伤。",
-    "你嘴里的味儿，隔着屏幕都能把人熏晕。",
-    "你这张脸挂在墙上，都算遗照界的耻辱。",
-    "你脑子里的存货，摆地摊都嫌占地方。",
-    "你活着像根行走的搅屎棍，还自带发酵功能。",
-    "你爸妈要是早知道你这样，当初就该少生优生。",
-    "你连吵架都吵不到重点，纯靠嗓门和心理素质硬顶。",
-    "你这种长相去当门神，辟的都是自己的邪。",
-    "你脑子空得能跑马，跑的还是瘸的。",
-    "你说话像广场舞音乐，又吵又土还没一句在调上。",
-    "你往人群里一站，人群自动分成两半：躲你的和笑你的。",
-    "你妈是不是站街的？不然你怎么贱得这么专业。",
-    "你全家就靠你妈一张嘴养活，一张吃饭一张接客。",
-    "你头上绿得能当红绿灯使，还搁这儿装什么纯情。",
-    "婊子见了你都得喊声前辈，论贱你确实是祖师爷。",
-    "你贱得这么理直气壮，是不是从小卖到大？",
-    "你妈生你的时候，产房都嫌晦气，护士都懒得拍你一下。",
-    "你这张嘴欠操，这脑子欠抽，全身上下就欠收拾。",
-    "你骚得这么起劲，是怕别人不知道你是出来卖的？",
-    "你是不是野种？不然正常人家怎么养得出你这种货色。",
-    "你爸的绿帽子都摞成山了，你还搁这儿装大尾巴狼。",
-    "你全家凑一块儿，都凑不出一句完整的人话。",
-    "你这种贱货，蚊子叮你一口都得吐出来。",
-    "你说话跟叫床似的，除了哼哼没一个字有内容。",
-    "就你这智商，把你卖了都凑不齐学费。",
-    "你长得这么抽象，你妈生你时是不是没敢看第二眼？",
-    "你贱起来六亲不认，骚起来认贼作父。",
-    "你妈是不是把你当垃圾生的？不然怎么随手就扔人堆里了。",
-    "你这种货色，倒贴都没人要，还得倒找钱。",
-    "你脑子里的水都放馊了，隔着天灵盖都能闻见味儿。",
-    "你这张脸丢出去，你妈都得连夜跟你断绝关系。",
-    "你是不是你爸捡来的？不然他怎么忍心让你长成这样。",
-    "你骚话这么多，怎么不去窑子里发挥特长？",
-    "你这种贱骨头，跪着都嫌你占地方。",
-    "你妈生你的时候是不是没使劲，把脑子给你落在产道里了？",
-    "你全家加起来都不如一条狗懂事，狗起码不咬自家人。",
-    "你脑子是不是租的？还欠着三个月房租没结。",
-    "你妈现在最后悔的事，就是当年没把你塞回去。",
-    "你妈把你生下来就没管过吧？不然你怎么野得像没人要的。",
-    "就你这点本事，连给人当小三都排不上号。",
-    "你全家是不是共用一个脑子？还是二手的，前任还是个傻子。",
-)
+
+def _load_corpus() -> tuple:
+    """加载内置语料 corpus.json，返回 (普通池, 激进池)，每条为 (主题, 语句)。"""
+    normal: list = []
+    spicy: list = []
+    try:
+        data = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+        normal = [(str(t), str(s)) for t, s in data.get("retorts", []) if s]
+        spicy = [(str(t), str(s)) for t, s in data.get("retorts_spicy", []) if s]
+    except FileNotFoundError:
+        logger.error("[retort_barrage] 缺少 corpus.json，内置语料为空")
+    except Exception as exc:
+        logger.error(f"[retort_barrage] corpus.json 解析失败: {exc}")
+    return normal, spicy
+
+
+def _load_custom() -> tuple:
+    """加载自定义语料 custom_retorts.txt：# 开头为注释；! 开头进激进池；其余进普通池。"""
+    normal: list = []
+    spicy: list = []
+    if not CUSTOM_PATH.exists():
+        return normal, spicy
+    try:
+        for raw in CUSTOM_PATH.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("!"):
+                text = line[1:].strip()
+                if text:
+                    spicy.append(("自定义", text))
+            else:
+                normal.append(("自定义", line))
+    except Exception as exc:
+        logger.error(f"[retort_barrage] custom_retorts.txt 读取失败: {exc}")
+    return normal, spicy
+
+
+def _load_stats() -> dict:
+    """加载战绩统计 stats.json（不存在或损坏时返回零值）。"""
+    try:
+        data = json.loads(STATS_PATH.read_text(encoding="utf-8"))
+        return {
+            "total_sent": int(data.get("total_sent", 0)),
+            "tasks_started": int(data.get("tasks_started", 0)),
+            "per_target": {
+                str(k): int(v) for k, v in data.get("per_target", {}).items()
+            },
+        }
+    except Exception:
+        return {"total_sent": 0, "tasks_started": 0, "per_target": {}}
+
+
+_BUILTIN_NORMAL, _BUILTIN_SPICY = _load_corpus()
+_CUSTOM_NORMAL, _CUSTOM_SPICY = _load_custom()
+RETORTS: list = _BUILTIN_NORMAL + _CUSTOM_NORMAL
+RETORTS_SPICY: list = _BUILTIN_SPICY + _CUSTOM_SPICY
 
 
 @dataclass
 class RetortJob:
     task: asyncio.Task
     starter_id: str
-    target_id: str
+    target_ids: list
     umo: str
+    theme: str = ""
     sent: int = 0
 
 
@@ -310,9 +105,33 @@ class RetortBarragePlugin(Star):
         self.announce_completion = bool(self.config.get("announce_completion", True))
         self.aggressive_enabled = bool(self.config.get("aggressive_enabled", False))
         self.aggressive_only = bool(self.config.get("aggressive_only", False))
+        self.target_blacklist = {
+            str(x) for x in self.config.get("target_blacklist", []) if str(x)
+        }
+        self.starter_whitelist = {
+            str(x) for x in self.config.get("starter_whitelist", []) if str(x)
+        }
+        self.group_cooldown = self._bounded_int("group_cooldown", 0, 0, 86400)
+        self.daily_start_limit = self._bounded_int("daily_start_limit", 0, 0, 1000)
+        self.surrender_enabled = bool(self.config.get("surrender_enabled", True))
+        self.surrender_keywords = [
+            str(x) for x in self.config.get("surrender_keywords", []) if str(x)
+        ] or list(DEFAULT_SURRENDER_KEYWORDS)
+        self.blocked_keywords = [
+            str(x) for x in self.config.get("blocked_keywords", []) if str(x)
+        ]
+        self.image_probability = self._bounded_int("image_probability", 0, 0, 100)
+        self.image_urls = [
+            str(x) for x in self.config.get("image_urls", []) if str(x)
+        ]
         self._jobs: dict[str, RetortJob] = {}
         self._jobs_lock = asyncio.Lock()
         self._closed = False
+        self._last_end: dict[str, float] = {}
+        self._daily_starts: dict[str, int] = {}
+        self._break_times: list[float] = []
+        self._paused_until = 0.0
+        self._stats = _load_stats()
 
     def _bounded_int(self, key: str, default: int, minimum: int, maximum: int) -> int:
         try:
@@ -337,16 +156,39 @@ class RetortBarragePlugin(Star):
         return f"{event.get_platform_id()}:{group_id or event.unified_msg_origin}"
 
     @staticmethod
-    def _extract_target(event: AstrMessageEvent) -> str:
-        """提取指令消息中第一个有效且非机器人的 At 目标。"""
+    def _extract_targets(event: AstrMessageEvent) -> list:
+        """提取指令消息中全部有效且非机器人的 At 目标（按出现顺序去重）。"""
         self_id = str(event.message_obj.self_id or "").strip().lower()
         invalid_targets = {"", "0", "all", "@all", self_id}
+        targets: list[str] = []
+        seen: set[str] = set()
         for component in event.message_obj.message:
             if isinstance(component, Comp.At):
                 target = str(getattr(component, "qq", "") or "").strip()
-                if target.lower() not in invalid_targets:
-                    return target
-        return ""
+                if target.lower() not in invalid_targets and target not in seen:
+                    seen.add(target)
+                    targets.append(target)
+        return targets
+
+    @staticmethod
+    def _extract_target(event: AstrMessageEvent) -> str:
+        """提取第一个有效 At 目标（兼容旧接口）。"""
+        targets = RetortBarragePlugin._extract_targets(event)
+        return targets[0] if targets else ""
+
+    def _parse_theme(self, event: AstrMessageEvent) -> tuple:
+        """解析指令末尾的可选主题参数，返回 (主题, 错误提示)。"""
+        tokens: list[str] = []
+        for component in event.message_obj.message:
+            if isinstance(component, Comp.Plain):
+                tokens.extend(str(getattr(component, "text", "") or "").split())
+        tokens = [t for t in tokens if "怼他" not in t and not t.startswith("/")]
+        if not tokens:
+            return "", ""
+        candidate = tokens[-1]
+        if candidate in THEMES:
+            return candidate, ""
+        return "", f"未知主题「{candidate}」，可用主题：{'、'.join(THEMES)}"
 
     def _make_chain(self, target_id: str, text: str) -> MessageChain:
         chain = MessageChain()
@@ -354,6 +196,14 @@ class RetortBarragePlugin(Star):
             chain.at(target_id, target_id).message(f" {text}")
         else:
             chain.message(text)
+        return chain
+
+    def _make_image_chain(self, target_id: str, url: str) -> MessageChain:
+        chain = MessageChain()
+        if self.mention_target:
+            chain.at(target_id, target_id).image(url)
+        else:
+            chain.image(url)
         return chain
 
     async def _send_chain(self, umo: str, chain: MessageChain) -> bool:
@@ -374,30 +224,89 @@ class RetortBarragePlugin(Star):
     async def _sleep(self) -> None:
         await asyncio.sleep(self.send_interval)
 
-    def _build_pool(self) -> list:
-        """按配置构建语料池：纯辛辣模式仅用激进语料；默认仅普通语料；激进开关混入激进语料。"""
+    def _build_pool(self, theme: str = "") -> list:
+        """按配置构建语料池：纯辛辣仅用激进语料；默认仅普通语料；激进开关混入；可按主题筛选并过滤敏感词。"""
         if self.aggressive_only:
-            return list(RETORTS_SPICY)
-        pool = list(RETORTS)
-        if self.aggressive_enabled:
-            pool += list(RETORTS_SPICY)
+            base = RETORTS_SPICY
+        else:
+            base = RETORTS
+            if self.aggressive_enabled:
+                base = RETORTS + RETORTS_SPICY
+        pool = [text for tag, text in base if (not theme or tag == theme)]
+        if self.blocked_keywords:
+            pool = [t for t in pool if not any(k in t for k in self.blocked_keywords)]
         return pool
 
-    async def _retort_loop(self, scope: str, umo: str, target_id: str):
+    def _wants_image(self) -> bool:
+        return (
+            bool(self.image_urls)
+            and self.image_probability > 0
+            and random.randint(1, 100) <= self.image_probability
+        )
+
+    def _record_send(self, target_id: str) -> None:
+        self._stats["total_sent"] += 1
+        self._stats["per_target"][target_id] = (
+            self._stats["per_target"].get(target_id, 0) + 1
+        )
+        self._save_stats()
+
+    def _record_start(self) -> None:
+        self._stats["tasks_started"] += 1
+        self._save_stats()
+
+    def _save_stats(self) -> None:
+        try:
+            STATS_PATH.write_text(
+                json.dumps(self._stats, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception as exc:
+            logger.warning(f"[retort_barrage] stats.json 写入失败: {exc}")
+
+    def _register_break(self) -> bool:
+        """记录一次熔断；10 分钟内达到 3 次则开启 10 分钟保护期，返回是否触发保护。"""
+        now = time.time()
+        self._break_times = [t for t in self._break_times if now - t < 600]
+        self._break_times.append(now)
+        if len(self._break_times) >= 3:
+            self._paused_until = now + 600
+            self._break_times = []
+            logger.warning("[retort_barrage] 10 分钟内连续熔断 3 次，暂停新任务 10 分钟")
+            return True
+        return False
+
+    async def _retort_loop(self, scope: str, umo: str, target_ids, theme: str = ""):
+        if isinstance(target_ids, str):
+            target_ids = [target_ids]
         sent = 0
         failures = 0
-        pool = self._build_pool()
-        random.shuffle(pool)
+        pool = self._build_pool(theme)
         try:
+            if not pool:
+                await self._send_text(
+                    umo,
+                    "当前配置下没有可用语料（主题无匹配或全部被敏感词过滤），任务自动停止。",
+                )
+                return
+            random.shuffle(pool)
             while not self._closed and sent < self.max_messages:
-                if not pool:
-                    pool = self._build_pool()
-                    if self.avoid_duplicates:
-                        random.shuffle(pool)
-                text = pool.pop() if self.avoid_duplicates else random.choice(pool)
-                if await self._send_chain(umo, self._make_chain(target_id, text)):
+                if self.avoid_duplicates and not pool:
+                    pool = self._build_pool(theme)
+                    if not pool:
+                        break
+                    random.shuffle(pool)
+                target_id = target_ids[sent % len(target_ids)]
+                if self._wants_image():
+                    chain = self._make_image_chain(
+                        target_id, random.choice(self.image_urls)
+                    )
+                else:
+                    text = pool.pop() if self.avoid_duplicates else random.choice(pool)
+                    chain = self._make_chain(target_id, text)
+                if await self._send_chain(umo, chain):
                     sent += 1
                     failures = 0
+                    self._record_send(target_id)
                     async with self._jobs_lock:
                         job = self._jobs.get(scope)
                         if job and job.task is asyncio.current_task():
@@ -408,8 +317,14 @@ class RetortBarragePlugin(Star):
                         f"[retort_barrage] 连续回怼发送失败 ({failures}/3)"
                     )
                     if failures >= 3:
+                        paused = self._register_break()
                         if not self._closed:
-                            await self._send_text(umo, "连续发送失败 3 次，任务已自动停止。")
+                            message = (
+                                "连续发送失败 3 次，任务已自动停止（可能触发平台风控）。"
+                            )
+                            if paused:
+                                message += "已进入 10 分钟保护期，期间暂停新的回怼任务。"
+                            await self._send_text(umo, message)
                         break
 
                 if sent < self.max_messages and not self._closed:
@@ -428,22 +343,79 @@ class RetortBarragePlugin(Star):
         except Exception as exc:
             logger.exception(f"[retort_barrage] 后台任务异常: {exc}")
         finally:
+            self._last_end[scope] = time.time()
             current = asyncio.current_task()
             async with self._jobs_lock:
                 job = self._jobs.get(scope)
                 if job and job.task is current:
                     self._jobs.pop(scope, None)
 
+    async def _stop_scope(self, scope: str) -> bool:
+        """停止指定群的任务并记录冷却起点，返回是否存在运行中的任务。"""
+        async with self._jobs_lock:
+            job = self._jobs.pop(scope, None)
+        if not job or job.task.done():
+            return False
+        job.task.cancel()
+        await asyncio.gather(job.task, return_exceptions=True)
+        self._last_end[scope] = time.time()
+        return True
+
     @filter.command("怼他")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def start_retort(self, event: AstrMessageEvent):
-        """开始连续回怼被提及的群成员。"""
-        target_id = self._extract_target(event)
-        if not target_id:
-            yield event.plain_result("请使用：/怼他 @某人")
+        """开始连续回怼被提及的群成员，支持多目标轮流与主题筛选。"""
+        target_ids = self._extract_targets(event)
+        if not target_ids:
+            yield event.plain_result(
+                "请使用：/怼他 @某人 [主题]，可选主题：智力、外貌、家人、存在、言行、自定义"
+            )
+            return
+        theme, theme_error = self._parse_theme(event)
+        if theme_error:
+            yield event.plain_result(theme_error)
+            return
+        sender_id = str(event.get_sender_id())
+        if self.starter_whitelist and sender_id not in self.starter_whitelist:
+            yield event.plain_result("你没有发起回怼的权限。")
+            return
+        blocked = [t for t in target_ids if t in self.target_blacklist]
+        if blocked:
+            yield event.plain_result(
+                f"目标 {'、'.join(blocked)} 在保护名单中，无法发起回怼。"
+            )
+            return
+        now = time.time()
+        if now < self._paused_until:
+            wait_minutes = int((self._paused_until - now) // 60) + 1
+            yield event.plain_result(
+                f"已触发风控保护，约 {wait_minutes} 分钟内暂停发起回怼。"
+            )
+            return
+        scope = self._scope_key(event)
+        if self.group_cooldown > 0:
+            last_end = self._last_end.get(scope, 0.0)
+            if now - last_end < self.group_cooldown:
+                wait_seconds = int(self.group_cooldown - (now - last_end)) + 1
+                yield event.plain_result(
+                    f"本群回怼冷却中，还需等待约 {wait_seconds} 秒。"
+                )
+                return
+        daily_key = f"{time.strftime('%Y-%m-%d')}:{sender_id}"
+        if (
+            self.daily_start_limit > 0
+            and self._daily_starts.get(daily_key, 0) >= self.daily_start_limit
+        ):
+            yield event.plain_result(
+                f"你今天已发起 {self.daily_start_limit} 次回怼，明天再来吧。"
+            )
+            return
+        if not self._build_pool(theme):
+            yield event.plain_result(
+                "当前配置下没有可用语料（主题无匹配或全部被敏感词过滤）。"
+            )
             return
 
-        scope = self._scope_key(event)
         already_running = False
         plugin_closed = False
         async with self._jobs_lock:
@@ -455,14 +427,17 @@ class RetortBarragePlugin(Star):
                     already_running = True
                 else:
                     task = asyncio.create_task(
-                        self._retort_loop(scope, event.unified_msg_origin, target_id),
+                        self._retort_loop(
+                            scope, event.unified_msg_origin, target_ids, theme
+                        ),
                         name=f"retort_barrage_{scope}",
                     )
                     self._jobs[scope] = RetortJob(
                         task=task,
-                        starter_id=str(event.get_sender_id()),
-                        target_id=target_id,
+                        starter_id=sender_id,
+                        target_ids=target_ids,
                         umo=event.unified_msg_origin,
+                        theme=theme,
                     )
 
         if plugin_closed:
@@ -471,21 +446,18 @@ class RetortBarragePlugin(Star):
         if already_running:
             yield event.plain_result("当前群已有回怼任务，请先发送 /停止怼。")
             return
+        self._daily_starts[daily_key] = self._daily_starts.get(daily_key, 0) + 1
+        self._record_start()
 
     @filter.command("停止怼")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def stop_retort(self, event: AstrMessageEvent):
         """停止当前群的连续回怼任务。"""
-        scope = self._scope_key(event)
-        async with self._jobs_lock:
-            job = self._jobs.pop(scope, None)
-        if not job or job.task.done():
+        stopped = await self._stop_scope(self._scope_key(event))
+        if stopped:
+            yield event.plain_result("已停止回怼。")
+        else:
             yield event.plain_result("当前没有正在运行的回怼任务。")
-            return
-
-        job.task.cancel()
-        await asyncio.gather(job.task, return_exceptions=True)
-        yield event.plain_result("已停止回怼。")
 
     @filter.command("怼状态")
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
@@ -497,9 +469,67 @@ class RetortBarragePlugin(Star):
         if not job or job.task.done():
             yield event.plain_result("当前没有正在运行的回怼任务。")
             return
+        targets = "、".join(job.target_ids)
+        theme = job.theme or "全部"
         yield event.plain_result(
-            f"当前正在回怼目标 {job.target_id}；已发送 {job.sent}/{self.max_messages} 条，间隔 {self.send_interval:g} 秒。"
+            f"当前正在回怼目标 {targets}；主题「{theme}」；已发送 {job.sent}/{self.max_messages} 条，间隔 {self.send_interval:g} 秒。"
         )
+
+    @filter.command("怼统计")
+    async def retort_stats(self, event: AstrMessageEvent):
+        """查看累计战绩与被怼榜。"""
+        stats = self._stats
+        lines = [
+            f"累计发起任务 {stats['tasks_started']} 次，发送语料 {stats['total_sent']} 条。"
+        ]
+        top = sorted(
+            stats["per_target"].items(), key=lambda kv: kv[1], reverse=True
+        )[:5]
+        if top:
+            ranking = "，".join(f"{qq}（{count} 条）" for qq, count in top)
+            lines.append(f"被怼榜 TOP5：{ranking}")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.command("怼帮助")
+    async def retort_help(self, event: AstrMessageEvent):
+        """查看使用说明与免责声明摘要。"""
+        if self.aggressive_only:
+            mode = "纯辛辣（仅激进语料）"
+        elif self.aggressive_enabled:
+            mode = "混合（普通+激进语料）"
+        else:
+            mode = "普通（仅普通语料）"
+        lines = [
+            "【连续回怼】使用说明",
+            "/怼他 @某人 [主题] —— 开始回怼，可 @多人轮流怼",
+            f"可选主题：{'、'.join(THEMES)}（默认全部随机）",
+            "/停止怼 —— 停止本群任务（任何人可用）",
+            "/怼状态 —— 查看当前任务进度",
+            "/怼统计 —— 查看战绩统计",
+            f"当前模式：{mode}；单次上限 {self.max_messages} 条，间隔 {self.send_interval:g} 秒",
+            "被怼的人发送「我错了」等求饶词可自动停止。",
+            "本插件仅供娱乐，请勿用于真实攻击；使用风险自担，详见仓库 README 免责声明。",
+        ]
+        yield event.plain_result("\n".join(lines))
+
+    @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
+    async def watch_surrender(self, event: AstrMessageEvent):
+        """监听被怼目标的求饶消息，命中关键词后自动停止本群任务。"""
+        if not self.surrender_enabled or self._closed:
+            return
+        scope = self._scope_key(event)
+        async with self._jobs_lock:
+            job = self._jobs.get(scope)
+            if not job or job.task.done():
+                return
+            is_target = str(event.get_sender_id()) in job.target_ids
+        if not is_target:
+            return
+        text = str(event.message_str or "")
+        if not any(keyword in text for keyword in self.surrender_keywords):
+            return
+        await self._stop_scope(scope)
+        yield event.plain_result("对方已求饶，本群回怼任务自动停止。得饶人处且饶人。")
 
     async def terminate(self):
         """插件停用或重载时清理全部后台任务。"""

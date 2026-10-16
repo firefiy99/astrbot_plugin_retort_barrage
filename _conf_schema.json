@@ -29,13 +29,67 @@
   "aggressive_enabled": {
     "description": "启用激进语料池（含更激烈的嘴臭与家人梗语句）",
     "type": "bool",
-    "hint": "默认关闭；开启后随机语料会混入 98 条激进语句，请谨慎用于公开群聊",
+    "hint": "默认关闭；开启后随机语料会混入 100 条激进语句，请谨慎用于公开群聊",
     "default": false
   },
   "aggressive_only": {
     "description": "纯辛辣模式（仅使用激进语料池）",
     "type": "bool",
-    "hint": "开启后仅从 98 条激进语句中随机发送，不再混入普通语料；独立生效，无需同时开启 aggressive_enabled",
+    "hint": "开启后仅从 100 条激进语句中随机发送，不再混入普通语料；独立生效，无需同时开启 aggressive_enabled",
     "default": false
+  },
+  "target_blacklist": {
+    "description": "保护名单：不可被怼的 QQ 号",
+    "type": "list",
+    "hint": "名单内的成员无法成为回怼目标（建议放群主、管理员、自己人）",
+    "default": []
+  },
+  "starter_whitelist": {
+    "description": "发起白名单：允许使用 /怼他 的 QQ 号",
+    "type": "list",
+    "hint": "留空表示所有人都可以发起",
+    "default": []
+  },
+  "group_cooldown": {
+    "description": "同群任务冷却（秒）",
+    "type": "int",
+    "hint": "上一次任务结束后需间隔这么多秒才能再次发起；0 为不限制",
+    "default": 0
+  },
+  "daily_start_limit": {
+    "description": "每人每日发起次数上限",
+    "type": "int",
+    "hint": "0 为不限制",
+    "default": 0
+  },
+  "surrender_enabled": {
+    "description": "被怼者求饶自动停止",
+    "type": "bool",
+    "hint": "被怼目标发送求饶关键词后自动终止本群任务",
+    "default": true
+  },
+  "surrender_keywords": {
+    "description": "求饶关键词",
+    "type": "list",
+    "hint": "命中任意一个即视为求饶；留空使用默认：我错了、我服了、别怼了、投降、饶了我",
+    "default": []
+  },
+  "blocked_keywords": {
+    "description": "语料敏感词过滤",
+    "type": "list",
+    "hint": "包含任意关键词的语句不会被发送（自定义语料同样生效）",
+    "default": []
+  },
+  "image_probability": {
+    "description": "表情包穿插概率（%）",
+    "type": "int",
+    "hint": "每条消息按该概率改发 image_urls 中的随机图片；0 为关闭",
+    "default": 0
+  },
+  "image_urls": {
+    "description": "表情包图片地址",
+    "type": "list",
+    "hint": "支持 http(s) 链接；表情包概率大于 0 时生效",
+    "default": []
   }
 }
