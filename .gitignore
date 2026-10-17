@@ -3,3 +3,4 @@ __pycache__/
 *.bak
 .DS_Store
 stats.json
+runtime_config.json

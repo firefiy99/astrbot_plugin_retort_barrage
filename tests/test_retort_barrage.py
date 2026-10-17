@@ -2,7 +2,10 @@
 
 import asyncio
 import importlib.util
+import json
+import os
 import sys
+import tempfile
 import time
 import types
 import unittest
@@ -126,6 +129,18 @@ async def collect(generator):
 
 
 class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        # 每个用例使用独立的临时文件，避免运行时模式/统计互相污染
+        self._runtime_file = Path(tempfile.gettempdir()) / (
+            f"retort_runtime_{os.getpid()}_{id(self)}.json"
+        )
+        self._stats_file = Path(tempfile.gettempdir()) / (
+            f"retort_stats_{os.getpid()}_{id(self)}.json"
+        )
+        patch.object(PLUGIN_MODULE, "RUNTIME_PATH", self._runtime_file).start()
+        patch.object(PLUGIN_MODULE, "STATS_PATH", self._stats_file).start()
+        self.addCleanup(patch.stopall)
+
     def make_plugin(self, side_effect=True, **config):
         if isinstance(side_effect, BaseException):
             send_message = AsyncMock(side_effect=side_effect)
@@ -432,6 +447,47 @@ class RetortBarrageTests(unittest.IsolatedAsyncioTestCase):
             await task
         self.assertEqual(plugin._stats["total_sent"], 2)
         self.assertEqual(plugin._stats["per_target"].get("123"), 2)
+
+    async def test_mode_switch_commands(self):
+        plugin, _ = self.make_plugin()
+        result = await collect(plugin.enable_aggressive(Event()))
+        self.assertTrue(plugin.aggressive_enabled)
+        self.assertFalse(plugin.aggressive_only)
+        self.assertIn("混合", result[0])
+        result = await collect(plugin.enable_pure_spicy(Event()))
+        self.assertTrue(plugin.aggressive_only)
+        self.assertIn("纯辛辣", result[0])
+        result = await collect(plugin.disable_pure_spicy(Event()))
+        self.assertFalse(plugin.aggressive_only)
+        self.assertTrue(plugin.aggressive_enabled)
+        result = await collect(plugin.disable_aggressive(Event()))
+        self.assertFalse(plugin.aggressive_enabled)
+        self.assertFalse(plugin.aggressive_only)
+        result = await collect(plugin.retort_mode(Event()))
+        self.assertIn("普通", result[0])
+        self.assertTrue(self._runtime_file.exists())
+        self.assertEqual(
+            json.loads(self._runtime_file.read_text(encoding="utf-8")),
+            {"aggressive_enabled": False, "aggressive_only": False},
+        )
+
+    async def test_mode_switch_denied(self):
+        plugin, _ = self.make_plugin(starter_whitelist=["999"])
+        result = await collect(plugin.enable_aggressive(Event(sender="123")))
+        self.assertIn("权限", result[0])
+        self.assertFalse(plugin.aggressive_enabled)
+        result = await collect(plugin.enable_pure_spicy(Event(sender="123")))
+        self.assertIn("权限", result[0])
+        self.assertFalse(plugin.aggressive_only)
+
+    def test_runtime_mode_loaded_on_init(self):
+        self._runtime_file.write_text(
+            json.dumps({"aggressive_enabled": True, "aggressive_only": True}),
+            encoding="utf-8",
+        )
+        plugin, _ = self.make_plugin()
+        self.assertTrue(plugin.aggressive_enabled)
+        self.assertTrue(plugin.aggressive_only)
 
 
 if __name__ == "__main__":

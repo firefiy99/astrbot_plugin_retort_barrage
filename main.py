@@ -18,6 +18,7 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 CORPUS_PATH = PLUGIN_DIR / "corpus.json"
 CUSTOM_PATH = PLUGIN_DIR / "custom_retorts.txt"
 STATS_PATH = PLUGIN_DIR / "stats.json"
+RUNTIME_PATH = PLUGIN_DIR / "runtime_config.json"
 
 # 主题标签：智力 / 外貌 / 家人 / 存在 / 言行；「自定义」供 custom_retorts.txt 使用。
 THEMES = ("智力", "外貌", "家人", "存在", "言行", "自定义")
@@ -76,6 +77,22 @@ def _load_stats() -> dict:
         return {"total_sent": 0, "tasks_started": 0, "per_target": {}}
 
 
+def _load_runtime_mode() -> Optional[dict]:
+    """加载群聊指令写入的运行时语料模式（不存在或损坏时返回 None）。"""
+    try:
+        data = json.loads(RUNTIME_PATH.read_text(encoding="utf-8"))
+        enabled = data.get("aggressive_enabled")
+        only = data.get("aggressive_only")
+        if enabled is None and only is None:
+            return None
+        return {
+            "aggressive_enabled": bool(enabled),
+            "aggressive_only": bool(only),
+        }
+    except Exception:
+        return None
+
+
 _BUILTIN_NORMAL, _BUILTIN_SPICY = _load_corpus()
 _CUSTOM_NORMAL, _CUSTOM_SPICY = _load_custom()
 RETORTS: list = _BUILTIN_NORMAL + _CUSTOM_NORMAL
@@ -105,6 +122,10 @@ class RetortBarragePlugin(Star):
         self.announce_completion = bool(self.config.get("announce_completion", True))
         self.aggressive_enabled = bool(self.config.get("aggressive_enabled", False))
         self.aggressive_only = bool(self.config.get("aggressive_only", False))
+        runtime_mode = _load_runtime_mode()
+        if runtime_mode is not None:
+            self.aggressive_enabled = runtime_mode["aggressive_enabled"]
+            self.aggressive_only = runtime_mode["aggressive_only"]
         self.target_blacklist = {
             str(x) for x in self.config.get("target_blacklist", []) if str(x)
         }
@@ -262,6 +283,38 @@ class RetortBarragePlugin(Star):
             )
         except Exception as exc:
             logger.warning(f"[retort_barrage] stats.json 写入失败: {exc}")
+
+    def _mode_name(self) -> str:
+        if self.aggressive_only:
+            return "纯辛辣（仅激进语料）"
+        if self.aggressive_enabled:
+            return "混合（普通+激进语料）"
+        return "普通（仅普通语料）"
+
+    def _can_control(self, event: AstrMessageEvent) -> bool:
+        """模式切换的权限：沿用发起白名单（留空则所有人可切换）。"""
+        sender_id = str(event.get_sender_id())
+        return not self.starter_whitelist or sender_id in self.starter_whitelist
+
+    def _set_mode(self, aggressive_enabled=None, aggressive_only=None) -> None:
+        """更新语料模式并持久化到 runtime_config.json（插件重载后仍生效）。"""
+        if aggressive_enabled is not None:
+            self.aggressive_enabled = aggressive_enabled
+        if aggressive_only is not None:
+            self.aggressive_only = aggressive_only
+        try:
+            RUNTIME_PATH.write_text(
+                json.dumps(
+                    {
+                        "aggressive_enabled": self.aggressive_enabled,
+                        "aggressive_only": self.aggressive_only,
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            logger.warning(f"[retort_barrage] runtime_config.json 写入失败: {exc}")
 
     def _register_break(self) -> bool:
         """记录一次熔断；10 分钟内达到 3 次则开启 10 分钟保护期，返回是否触发保护。"""
@@ -506,11 +559,61 @@ class RetortBarragePlugin(Star):
             "/停止怼 —— 停止本群任务（任何人可用）",
             "/怼状态 —— 查看当前任务进度",
             "/怼统计 —— 查看战绩统计",
+            "/开启辛辣 /关闭辛辣 —— 普通/混合语料模式切换",
+            "/纯辛辣 /退出纯辛辣 —— 仅激进语料池开关",
+            "/怼模式 —— 查看当前语料模式",
             f"当前模式：{mode}；单次上限 {self.max_messages} 条，间隔 {self.send_interval:g} 秒",
             "被怼的人发送「我错了」等求饶词可自动停止。",
             "本插件仅供娱乐，请勿用于真实攻击；使用风险自担，详见仓库 README 免责声明。",
         ]
         yield event.plain_result("\n".join(lines))
+
+    @filter.command("怼模式")
+    async def retort_mode(self, event: AstrMessageEvent):
+        """查看当前语料模式。"""
+        yield event.plain_result(
+            f"当前语料模式：{self._mode_name()}\n"
+            "切换指令：/开启辛辣（普通+激进混合） /关闭辛辣（普通） "
+            "/纯辛辣（仅激进池） /退出纯辛辣"
+        )
+
+    @filter.command("开启辛辣")
+    async def enable_aggressive(self, event: AstrMessageEvent):
+        """切换为混合模式（普通+激进语料池）。"""
+        if not self._can_control(event):
+            yield event.plain_result("你没有切换模式的权限。")
+            return
+        self._set_mode(aggressive_enabled=True, aggressive_only=False)
+        yield event.plain_result(
+            "已开启激进语料池：当前为混合模式（普通+激进语料随机发送）。"
+        )
+
+    @filter.command("关闭辛辣")
+    async def disable_aggressive(self, event: AstrMessageEvent):
+        """切换回普通模式（仅普通语料池）。"""
+        if not self._can_control(event):
+            yield event.plain_result("你没有切换模式的权限。")
+            return
+        self._set_mode(aggressive_enabled=False, aggressive_only=False)
+        yield event.plain_result("已关闭激进语料池：当前为普通模式（仅普通语料）。")
+
+    @filter.command("纯辛辣")
+    async def enable_pure_spicy(self, event: AstrMessageEvent):
+        """切换为纯辛辣模式（仅激进语料池）。"""
+        if not self._can_control(event):
+            yield event.plain_result("你没有切换模式的权限。")
+            return
+        self._set_mode(aggressive_only=True)
+        yield event.plain_result("已开启纯辛辣模式：仅从激进语料池随机发送。")
+
+    @filter.command("退出纯辛辣")
+    async def disable_pure_spicy(self, event: AstrMessageEvent):
+        """退出纯辛辣模式。"""
+        if not self._can_control(event):
+            yield event.plain_result("你没有切换模式的权限。")
+            return
+        self._set_mode(aggressive_only=False)
+        yield event.plain_result(f"已退出纯辛辣模式：当前为{self._mode_name()}。")
 
     @filter.event_message_type(filter.EventMessageType.GROUP_MESSAGE)
     async def watch_surrender(self, event: AstrMessageEvent):
